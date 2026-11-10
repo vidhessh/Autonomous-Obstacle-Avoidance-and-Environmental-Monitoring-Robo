@@ -1,38 +1,40 @@
-#include <SoftwareSerial.h>
 #include <DHT.h>
 
-/* ======== BLUETOOTH ======== */
-SoftwareSerial BT(10, 11); // RX, TX
+/* ======== BLUETOOTH (external HC-05/HC-06 on UART2) ======== */
+// SoftwareSerial is not needed on ESP32, it has hardware UARTs
+#define BT_RX 16   // ESP32 RX2  <- HC-05 TX
+#define BT_TX 17   // ESP32 TX2  -> HC-05 RX
+HardwareSerial BT(2);
 
 /* ======== ULTRASONIC ======== */
-#define TRIG_PIN  12
-#define ECHO_PIN  13
+#define TRIG_PIN  5
+#define ECHO_PIN  18   // use a voltage divider (HC-SR04 echo is 5V)
 
 /* ======== MQ SENSOR ======== */
-#define MQ2_PIN   A0
+#define MQ2_PIN   34   // ADC1, input only (use a divider if module output is 5V)
 
 /* ======== LIGHT SENSOR ======== */
-#define LDR_PIN   A1
+#define LDR_PIN   35   // ADC1, input only
 
 /* ======== DHT SENSOR ======== */
-#define DHTPIN    2
+#define DHTPIN    4
 #define DHTTYPE   DHT22
 
 DHT dht(DHTPIN, DHTTYPE);
 
 /* ======== MOTOR DRIVER ======== */
-#define ENA  3
-#define ENB  9
+#define ENA  25
+#define ENB  26
 
-#define IN1  4
-#define IN2  5
-#define IN3  6
-#define IN4  7
+#define IN1  27
+#define IN2  14
+#define IN3  33
+#define IN4  32
 
 #define MOTOR_SPEED 170
 
 /* ======== LED ======== */
-#define LED_PIN 8
+#define LED_PIN 23
 
 /* ======== THRESHOLDS ======== */
 #define LIGHT_LOW_THRESHOLD   800
@@ -40,21 +42,56 @@ DHT dht(DHTPIN, DHTTYPE);
 #define GAS_THRESHOLD         400
 #define TEMP_THRESHOLD        45
 
+/* ======== PWM HELPER (works on ESP32 core 2.x and 3.x) ======== */
+#define PWM_FREQ 5000
+#define PWM_RES  8      // 8-bit, 0-255 like Arduino analogWrite
+#define CH_A 0
+#define CH_B 1
+
+void pwmSetup() {
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  ledcAttach(ENA, PWM_FREQ, PWM_RES);
+  ledcAttach(ENB, PWM_FREQ, PWM_RES);
+#else
+  ledcSetup(CH_A, PWM_FREQ, PWM_RES);
+  ledcSetup(CH_B, PWM_FREQ, PWM_RES);
+  ledcAttachPin(ENA, CH_A);
+  ledcAttachPin(ENB, CH_B);
+#endif
+}
+
+void pwmWriteMotors(int a, int b) {
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  ledcWrite(ENA, a);
+  ledcWrite(ENB, b);
+#else
+  ledcWrite(CH_A, a);
+  ledcWrite(CH_B, b);
+#endif
+}
+
+/* ======== ADC HELPER ======== */
+// ESP32 ADC is 12-bit (0-4095). Shift to 10-bit (0-1023)
+// so the original thresholds still work unchanged.
+int readADC10(int pin) {
+  return analogRead(pin) >> 2;
+}
+
 void setup() {
   Serial.begin(9600);
-  BT.begin(9600);
+  BT.begin(9600, SERIAL_8N1, BT_RX, BT_TX);
 
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
   pinMode(MQ2_PIN, INPUT);
   pinMode(LDR_PIN, INPUT);
 
-  pinMode(ENA, OUTPUT);
-  pinMode(ENB, OUTPUT);
   pinMode(IN1, OUTPUT);
   pinMode(IN2, OUTPUT);
   pinMode(IN3, OUTPUT);
   pinMode(IN4, OUTPUT);
+
+  pwmSetup();
 
   pinMode(LED_PIN, OUTPUT);   // LED setup
 
@@ -66,8 +103,8 @@ void setup() {
 void loop() {
 
   long distance = getDistance();
-  int gasValue = analogRead(MQ2_PIN);
-  int lightValue = analogRead(LDR_PIN);
+  int gasValue = readADC10(MQ2_PIN);
+  int lightValue = readADC10(LDR_PIN);
   float temp = dht.readTemperature();
 
   if (isnan(temp)) temp = 0;
@@ -126,8 +163,7 @@ void loop() {
 /* ======== MOTOR FUNCTIONS ======== */
 
 void moveForward() {
-  analogWrite(ENA, MOTOR_SPEED);
-  analogWrite(ENB, MOTOR_SPEED);
+  pwmWriteMotors(MOTOR_SPEED, MOTOR_SPEED);
 
   digitalWrite(IN1, HIGH);
   digitalWrite(IN2, LOW);
@@ -136,13 +172,11 @@ void moveForward() {
 }
 
 void stopMotors() {
-  analogWrite(ENA, 0);
-  analogWrite(ENB, 0);
+  pwmWriteMotors(0, 0);
 }
 
 void turnRight() {
-  analogWrite(ENA, MOTOR_SPEED);
-  analogWrite(ENB, MOTOR_SPEED);
+  pwmWriteMotors(MOTOR_SPEED, MOTOR_SPEED);
 
   digitalWrite(IN1, HIGH);
   digitalWrite(IN2, LOW);
@@ -151,8 +185,7 @@ void turnRight() {
 }
 
 void turnLeft() {
-  analogWrite(ENA, MOTOR_SPEED);
-  analogWrite(ENB, MOTOR_SPEED);
+  pwmWriteMotors(MOTOR_SPEED, MOTOR_SPEED);
 
   digitalWrite(IN1, LOW);
   digitalWrite(IN2, HIGH);
